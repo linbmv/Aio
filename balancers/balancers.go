@@ -71,6 +71,8 @@ func (w Rotor) Pop() (uint, error) {
 		return 0, fmt.Errorf("no provide items")
 	}
 	e := w.Front()
+	// 取出队首后移到队尾，实现真正的轮询
+	w.MoveToBack(e)
 	return e.Value.(uint), nil
 }
 

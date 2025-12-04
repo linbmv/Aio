@@ -127,7 +127,11 @@ func BalanceChat(ctx context.Context, start time.Time, clientFormat string, befo
 				continue
 			}
 
-			req, usedKey, err := chatModel.BuildReq(httptrace.WithClientTrace(ctx, trace), header, modelWithProvider.ProviderModel, reqBody)
+			// 为每个请求设置超时 context
+			reqCtx, cancel := context.WithTimeout(ctx, time.Second*time.Duration(providersWithMeta.TimeOut))
+			defer cancel()
+
+			req, usedKey, err := chatModel.BuildReq(httptrace.WithClientTrace(reqCtx, trace), header, modelWithProvider.ProviderModel, reqBody)
 			if err != nil {
 				retryLog <- log.WithError(err)
 				continue

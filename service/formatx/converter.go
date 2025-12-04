@@ -2,6 +2,7 @@ package formatx
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -322,7 +323,14 @@ func ConvertResponse(raw []byte, from, to, model string) ([]byte, error) {
 }
 
 // ConvertStream 转换流式响应
-func ConvertStream(r io.Reader, w io.Writer, from, to, model string) error {
+func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, model string) error {
+	// 如果上下文已取消，直接返回
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	if from == to {
 		_, err := io.Copy(w, r)
 		return err

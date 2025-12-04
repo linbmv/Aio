@@ -2,9 +2,9 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/atopos31/llmio/common"
-	"github.com/atopos31/llmio/middleware/authx"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,14 +16,21 @@ func Auth(token string) gin.HandlerFunc {
 			return
 		}
 
-		// 使用增强的认证提取，支持多种方式
-		extractedKey := authx.ExtractAPIKey(c.Request)
-		if extractedKey == "" {
+		// 只从 Authorization Bearer 提取网关 TOKEN，避免与上游 Provider 的 X-Api-Key 混淆
+		auth := c.GetHeader("Authorization")
+		if auth == "" {
 			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "API key is missing")
 			c.Abort()
 			return
 		}
 
+		if !strings.HasPrefix(auth, "Bearer ") {
+			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "Invalid authorization format")
+			c.Abort()
+			return
+		}
+
+		extractedKey := strings.TrimPrefix(auth, "Bearer ")
 		if extractedKey != token {
 			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "Invalid token")
 			c.Abort()
@@ -41,14 +48,21 @@ func AuthAnthropic(koken string) gin.HandlerFunc {
 			return
 		}
 
-		// 使用增强的认证提取，支持多种方式
-		extractedKey := authx.ExtractAPIKey(c.Request)
-		if extractedKey == "" {
+		// 只从 Authorization Bearer 提取网关 TOKEN
+		auth := c.GetHeader("Authorization")
+		if auth == "" {
 			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "API key is missing")
 			c.Abort()
 			return
 		}
 
+		if !strings.HasPrefix(auth, "Bearer ") {
+			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "Invalid authorization format")
+			c.Abort()
+			return
+		}
+
+		extractedKey := strings.TrimPrefix(auth, "Bearer ")
 		if extractedKey != koken {
 			common.ErrorWithHttpStatus(c, http.StatusUnauthorized, http.StatusUnauthorized, "Invalid token")
 			c.Abort()
