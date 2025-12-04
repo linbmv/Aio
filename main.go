@@ -23,6 +23,11 @@ func init() {
 	ctx := context.Background()
 	models.Init(ctx, "./db/llmio.db")
 	slog.Info("TZ", "time.Local", time.Local.String())
+
+	token := os.Getenv("TOKEN")
+	if token == "" {
+		slog.Warn("TOKEN not set - API endpoints will be accessible without authentication")
+	}
 }
 
 func main() {
