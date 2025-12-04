@@ -728,7 +728,7 @@ func GetChatIO(c *gin.Context) {
 
 	// 对敏感内容进行截断（最多显示 500 字符）
 	chatIO.Input = truncateString(chatIO.Input, 500)
-	chatIO.OutputUnion = truncateString(chatIO.OutputUnion, 500)
+	chatIO.OutputUnion.OfString = truncateString(chatIO.OutputUnion.OfString, 500)
 
 	common.Success(c, chatIO)
 }
