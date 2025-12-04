@@ -38,7 +38,8 @@ func chatHandler(c *gin.Context, defaultFormat string) {
 
 	rawBody, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		if errors.Is(err, http.ErrBodyTooLarge) {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			common.PayloadTooLarge(c, "request body too large")
 			return
 		}
