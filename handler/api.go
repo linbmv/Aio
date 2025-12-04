@@ -59,6 +59,18 @@ type SystemConfigRequest struct {
 	MinWeight           int     `json:"min_weight"`
 }
 
+// maskSensitiveConfig 对 Provider Config 中的敏感信息进行脱敏
+func maskSensitiveConfig(config string) string {
+	if config == "" {
+		return ""
+	}
+	// 简单脱敏：只返回前 20 个字符 + "..."
+	if len(config) > 20 {
+		return config[:20] + "... [REDACTED]"
+	}
+	return "[REDACTED]"
+}
+
 // GetProviders 获取所有提供商列表（支持名称搜索和类型筛选）
 func GetProviders(c *gin.Context) {
 	// 筛选参数
@@ -79,6 +91,11 @@ func GetProviders(c *gin.Context) {
 	if err := query.Find(&providers).Error; err != nil {
 		common.InternalServerError(c, err.Error())
 		return
+	}
+
+	// 脱敏处理
+	for i := range providers {
+		providers[i].Config = maskSensitiveConfig(providers[i].Config)
 	}
 
 	common.Success(c, providers)
@@ -692,6 +709,14 @@ func GetRequestLogs(c *gin.Context) {
 }
 
 // GetChatIO 查询指定日志的输入输出记录
+// truncateString 截断字符串到指定长度
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "... [TRUNCATED]"
+}
+
 func GetChatIO(c *gin.Context) {
 	id := c.Param("id")
 
@@ -700,6 +725,10 @@ func GetChatIO(c *gin.Context) {
 		common.NotFound(c, "ChatIO not found")
 		return
 	}
+
+	// 对敏感内容进行截断（最多显示 500 字符）
+	chatIO.Input = truncateString(chatIO.Input, 500)
+	chatIO.OutputUnion = truncateString(chatIO.OutputUnion, 500)
 
 	common.Success(c, chatIO)
 }
