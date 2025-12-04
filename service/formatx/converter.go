@@ -261,7 +261,10 @@ func CanConvert(from, to string) bool {
 	if from == to {
 		return true
 	}
-	// 支持所有格式互转
+	// Anthropic 请求无法转换为 OpenAI/OpenAI-Res（响应可以）
+	if from == consts.StyleAnthropic && (to == consts.StyleOpenAI || to == consts.StyleOpenAIRes) {
+		return false
+	}
 	validFormats := map[string]bool{
 		consts.StyleOpenAI:    true,
 		consts.StyleAnthropic: true,
