@@ -274,23 +274,42 @@ type ProvidersWithMeta struct {
 }
 
 func ProvidersWithMetaBymodelsName(ctx context.Context, style string, before Before) (*ProvidersWithMeta, error) {
+	// 尝试按 model.name 查询
 	model, err := gorm.G[models.Model](models.DB).Where("name = ?", before.Model).First(ctx)
+	providerModelMatch := ""
+
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if _, err := SaveChatLog(ctx, models.ChatLog{
-				Name:   before.Model,
-				Status: "error",
-				Style:  style,
-				Error:  err.Error(),
-			}); err != nil {
+			// 按 provider_model 反查，兼容用户传入厂商模型名
+			matched, mapErr := gorm.G[models.ModelWithProvider](models.DB).
+				Where("provider_model = ?", before.Model).
+				Where("status = ?", true).
+				First(ctx)
+			if mapErr != nil {
+				if _, err := SaveChatLog(ctx, models.ChatLog{
+					Name:   before.Model,
+					Status: "error",
+					Style:  style,
+					Error:  err.Error(),
+				}); err != nil {
+					return nil, err
+				}
+				return nil, errors.New("not found model " + before.Model)
+			}
+			providerModelMatch = matched.ProviderModel
+			model, err = gorm.G[models.Model](models.DB).Where("id = ?", matched.ModelID).First(ctx)
+			if err != nil {
 				return nil, err
 			}
-			return nil, errors.New("not found model " + before.Model)
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 
 	modelWithProviderChain := gorm.G[models.ModelWithProvider](models.DB).Where("model_id = ?", model.ID).Where("status = ?", true)
+	if providerModelMatch != "" {
+		modelWithProviderChain = modelWithProviderChain.Where("provider_model = ?", providerModelMatch)
+	}
 
 	if before.toolCall {
 		modelWithProviderChain = modelWithProviderChain.Where("tool_call = ?", true)

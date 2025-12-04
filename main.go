@@ -48,14 +48,14 @@ func main() {
 	openai := router.Group("/openai/v1", authOpenAI)
 	{
 		openai.GET("/models", handler.OpenAIModelsHandler)
-		openai.POST("/chat/completions", bodyLimit, handler.ChatCompletionsHandler)
-		openai.POST("/responses", bodyLimit, handler.ResponsesHandler)
+		openai.POST("/chat/completions", bodyLimit, handler.UnifiedChat)
+		openai.POST("/responses", bodyLimit, handler.UnifiedChat)
 	}
 
 	anthropic := router.Group("/anthropic/v1", authAnthropic)
 	{
 		anthropic.GET("/models", handler.AnthropicModelsHandler)
-		anthropic.POST("/messages", bodyLimit, handler.Messages)
+		anthropic.POST("/messages", bodyLimit, handler.UnifiedChat)
 		// TODO
 		anthropic.POST("/messages/count_tokens", bodyLimit)
 	}
@@ -64,9 +64,9 @@ func main() {
 	v1 := router.Group("/v1", authCompat)
 	{
 		v1.GET("/models", handler.OpenAIModelsHandler)
-		v1.POST("/chat/completions", bodyLimit, handler.ChatCompletionsHandler)
-		v1.POST("/responses", bodyLimit, handler.ResponsesHandler)
-		v1.POST("/messages", bodyLimit, handler.Messages)
+		v1.POST("/chat/completions", bodyLimit, handler.UnifiedChat)
+		v1.POST("/responses", bodyLimit, handler.UnifiedChat)
+		v1.POST("/messages", bodyLimit, handler.UnifiedChat)
 		// TODO
 		v1.POST("/messages/count_tokens", bodyLimit)
 	}

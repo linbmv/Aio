@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/atopos31/llmio/common"
@@ -29,9 +30,12 @@ var (
 	}
 )
 
-func ChatCompletionsHandler(c *gin.Context) { chatHandler(c, consts.StyleOpenAI) }
-func ResponsesHandler(c *gin.Context)       { chatHandler(c, consts.StyleOpenAIRes) }
-func Messages(c *gin.Context)               { chatHandler(c, consts.StyleAnthropic) }
+// UnifiedChat 统一入口，根据路由兜底格式后让请求体检测覆盖
+func UnifiedChat(c *gin.Context) { chatHandler(c, defaultFormatFromPath(c.FullPath())) }
+
+func ChatCompletionsHandler(c *gin.Context) { UnifiedChat(c) }
+func ResponsesHandler(c *gin.Context)       { UnifiedChat(c) }
+func Messages(c *gin.Context)               { UnifiedChat(c) }
 
 func chatHandler(c *gin.Context, defaultFormat string) {
 	defer c.Request.Body.Close()
@@ -131,4 +135,15 @@ func writeHeader(c *gin.Context, stream bool, header http.Header) {
 		c.Header("X-Accel-Buffering", "no")
 	}
 	c.Writer.Flush()
+}
+
+func defaultFormatFromPath(path string) string {
+	switch {
+	case strings.Contains(path, "/responses"):
+		return consts.StyleOpenAIRes
+	case strings.Contains(path, "/messages"):
+		return consts.StyleAnthropic
+	default:
+		return consts.StyleOpenAI
+	}
 }
