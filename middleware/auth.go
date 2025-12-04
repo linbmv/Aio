@@ -28,6 +28,7 @@ func Auth(token string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		c.Next()
 	}
 }
 
@@ -51,5 +52,6 @@ func AuthAnthropic(koken string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		c.Next()
 	}
 }
