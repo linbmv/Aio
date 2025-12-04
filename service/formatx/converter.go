@@ -184,6 +184,57 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	return fmt.Errorf("anthropic stream closed without stop event")
 }
 
+// AnthropicSSEToOpenAIRes 将 Anthropic SSE 流转换为 OpenAI-Res SSE 格式
+func AnthropicSSEToOpenAIRes(r io.Reader, w io.Writer, model string) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var eventType string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+			switch eventType {
+			case "content_block_delta":
+				text := gjson.Get(data, "delta.text").String()
+				if text != "" {
+					chunk := map[string]interface{}{
+						"model":  model,
+						"output": text,
+					}
+					chunkBytes, _ := json.Marshal(chunk)
+					fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+					if flusher, ok := w.(http.Flusher); ok {
+						flusher.Flush()
+					}
+				}
+
+			case "message_stop":
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return nil
+
+			case "error":
+				return fmt.Errorf("anthropic stream error: %s", data)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("anthropic stream read error: %w", err)
+	}
+	return fmt.Errorf("anthropic stream closed without stop event")
+}
+
 // DetectFormat 检测请求格式
 func DetectFormat(raw []byte, fallback string) string {
 	if gjson.GetBytes(raw, "input").Exists() {
@@ -337,6 +388,9 @@ func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, mode
 	}
 	if from == consts.StyleAnthropic && to == consts.StyleOpenAI {
 		return AnthropicSSEToOpenAI(r, w, model)
+	}
+	if from == consts.StyleAnthropic && to == consts.StyleOpenAIRes {
+		return AnthropicSSEToOpenAIRes(r, w, model)
 	}
 	// 其他流式转换暂不支持，直接透传
 	_, err := io.Copy(w, r)
