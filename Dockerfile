@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm run build
 
 # Build stage for the backend
-FROM golang:1.25 AS backend-build
+FROM golang:1.23 AS backend-build
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -23,6 +23,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 # Copy the built frontend from frontend build stage
 COPY --from=frontend-build /app/webui/dist ./webui/dist
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod tidy
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o llmio .
