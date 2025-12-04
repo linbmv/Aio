@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -115,6 +116,8 @@ func chatHandler(c *gin.Context, defaultFormat string) {
 		common.InternalServerError(c, err.Error())
 		return
 	}
+	c.Writer.Header().Del("Content-Length")
+	c.Header("Content-Length", fmt.Sprintf("%d", len(respBody)))
 	if _, err := c.Writer.Write(respBody); err != nil {
 		common.InternalServerError(c, err.Error())
 		return

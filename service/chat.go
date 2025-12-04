@@ -69,7 +69,7 @@ func BalanceChat(ctx context.Context, start time.Time, clientFormat string, befo
 		return converted, nil
 	}
 
-	timer := time.NewTimer(time.Second * time.Duration(providersWithMeta.TimeOut))
+	timer := time.NewTimer(time.Second * time.Duration(providersWithMeta.TimeOut*providersWithMeta.MaxRetry))
 	defer timer.Stop()
 	for retry := 0; retry < providersWithMeta.MaxRetry; retry++ {
 		select {
@@ -94,6 +94,8 @@ func BalanceChat(ctx context.Context, start time.Time, clientFormat string, befo
 			// 检查渠道是否冷却中
 			if providers.IsChannelCoolingDown(modelWithProvider.ModelID, modelWithProvider.ProviderID) {
 				slog.Info("channel is cooling down, skip", "model_id", modelWithProvider.ModelID, "provider_id", modelWithProvider.ProviderID)
+				balancer.Delete(id)
+				retry--
 				continue
 			}
 
@@ -154,6 +156,9 @@ func BalanceChat(ctx context.Context, start time.Time, clientFormat string, befo
 			if err != nil {
 				cancel()
 				retryLog <- log.WithError(err)
+				providers.MarkChannelFailure(modelWithProvider.ModelID, provider.ID, 30*time.Second)
+				balancer.Delete(id)
+				retry--
 				continue
 			}
 
@@ -247,6 +252,12 @@ func buildHeaders(source http.Header, withHeader bool, customHeaders map[string]
 	header := http.Header{}
 	if withHeader {
 		header = source.Clone()
+	} else {
+		for _, k := range []string{"Content-Type", "Accept", "Accept-Language", "User-Agent"} {
+			if v := source.Values(k); len(v) > 0 {
+				header[k] = append([]string{}, v...)
+			}
+		}
 	}
 
 	if stream {

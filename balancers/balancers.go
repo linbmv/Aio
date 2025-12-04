@@ -48,7 +48,16 @@ func (w Lottery) Delete(key uint) {
 }
 
 func (w Lottery) Reduce(key uint) {
-	w[key] -= w[key] / 3
+	if weight, ok := w[key]; ok {
+		dec := weight / 3
+		if dec < 1 {
+			dec = 1
+		}
+		w[key] = weight - dec
+		if w[key] <= 0 {
+			delete(w, key)
+		}
+	}
 }
 
 // 按顺序循环轮转，每次降低权重后移到队尾
@@ -88,7 +97,11 @@ func (w Rotor) Delete(key uint) {
 func (w Rotor) Reduce(key uint) {
 	for e := w.Front(); e != nil; e = e.Next() {
 		if e.Value.(uint) == key {
+			next := e.Next()
 			w.MoveToBack(e)
+			if next != nil {
+				w.MoveToBack(next)
+			}
 			return
 		}
 	}

@@ -67,6 +67,36 @@ func OpenAIToAnthropic(raw []byte) ([]byte, error) {
 	return json.Marshal(anthReq)
 }
 
+// AnthropicToOpenAIReq 将 Anthropic 请求转换为 OpenAI 格式
+func AnthropicToOpenAIReq(raw []byte) ([]byte, error) {
+	system := gjson.GetBytes(raw, "system").String()
+	model := gjson.GetBytes(raw, "model").String()
+	stream := gjson.GetBytes(raw, "stream").Bool()
+
+	var messages []map[string]string
+	if system != "" {
+		messages = append(messages, map[string]string{"role": "system", "content": system})
+	}
+
+	gjson.GetBytes(raw, "messages").ForEach(func(_, msg gjson.Result) bool {
+		role := msg.Get("role").String()
+		var content string
+		if msg.Get("content").IsArray() {
+			content = msg.Get("content.0.text").String()
+		} else {
+			content = msg.Get("content").String()
+		}
+		messages = append(messages, map[string]string{"role": role, "content": content})
+		return true
+	})
+
+	return json.Marshal(map[string]interface{}{
+		"model":    model,
+		"messages": messages,
+		"stream":   stream,
+	})
+}
+
 // AnthropicToOpenAI 将 Anthropic 响应转换为 OpenAI 格式
 func AnthropicToOpenAI(raw []byte, model string) ([]byte, error) {
 	var resp struct {
@@ -241,7 +271,9 @@ func DetectFormat(raw []byte, fallback string) string {
 		return consts.StyleOpenAIRes
 	}
 	msg := gjson.GetBytes(raw, "messages")
-	if msg.IsArray() && msg.Get("0.content").IsArray() {
+	model := strings.ToLower(gjson.GetBytes(raw, "model").String())
+	// Anthropic 格式：messages[0].content 是数组 且 模型名包含 claude
+	if msg.IsArray() && msg.Get("0.content").IsArray() && strings.Contains(model, "claude") {
 		return consts.StyleAnthropic
 	}
 	return fallback
@@ -313,10 +345,6 @@ func CanConvert(from, to string) bool {
 	if from == to {
 		return true
 	}
-	// Anthropic 请求无法转换为 OpenAI/OpenAI-Res（响应可以）
-	if from == consts.StyleAnthropic && (to == consts.StyleOpenAI || to == consts.StyleOpenAIRes) {
-		return false
-	}
 	validFormats := map[string]bool{
 		consts.StyleOpenAI:    true,
 		consts.StyleAnthropic: true,
@@ -344,9 +372,13 @@ func ConvertRequest(raw []byte, from, to string) ([]byte, error) {
 		}
 		return OpenAIToAnthropic(converted)
 	case from == consts.StyleAnthropic && to == consts.StyleOpenAI:
-		return nil, fmt.Errorf("unsupported request convert: %s -> %s", from, to)
+		return AnthropicToOpenAIReq(raw)
 	case from == consts.StyleAnthropic && to == consts.StyleOpenAIRes:
-		return nil, fmt.Errorf("unsupported request convert: %s -> %s", from, to)
+		converted, err := AnthropicToOpenAIReq(raw)
+		if err != nil {
+			return nil, err
+		}
+		return OpenAIToOpenAIRes(converted)
 	}
 	return nil, fmt.Errorf("unsupported request convert: %s -> %s", from, to)
 }
@@ -375,7 +407,6 @@ func ConvertResponse(raw []byte, from, to, model string) ([]byte, error) {
 
 // ConvertStream 转换流式响应
 func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, model string) error {
-	// 如果上下文已取消，直接返回
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -386,13 +417,87 @@ func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, mode
 		_, err := io.Copy(w, r)
 		return err
 	}
-	if from == consts.StyleAnthropic && to == consts.StyleOpenAI {
+	switch {
+	case from == consts.StyleAnthropic && to == consts.StyleOpenAI:
 		return AnthropicSSEToOpenAI(r, w, model)
-	}
-	if from == consts.StyleAnthropic && to == consts.StyleOpenAIRes {
+	case from == consts.StyleAnthropic && to == consts.StyleOpenAIRes:
 		return AnthropicSSEToOpenAIRes(r, w, model)
+	case from == consts.StyleOpenAI && to == consts.StyleOpenAIRes:
+		return OpenAISSEToOpenAIRes(r, w, model)
+	case from == consts.StyleOpenAIRes && to == consts.StyleOpenAI:
+		return OpenAIResSSEToOpenAI(r, w, model)
 	}
-	// 其他流式转换暂不支持，直接透传
 	_, err := io.Copy(w, r)
 	return err
+}
+
+// OpenAISSEToOpenAIRes 将 OpenAI SSE 流转换为 OpenAI-Res SSE 格式
+func OpenAISSEToOpenAIRes(r io.Reader, w io.Writer, model string) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimPrefix(scanner.Text(), "data: ")
+		if line == "" || line == scanner.Text() {
+			continue
+		}
+		if line == "[DONE]" {
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			return nil
+		}
+		content := gjson.Get(line, "choices.0.delta.content").String()
+		if content == "" {
+			content = gjson.Get(line, "choices.0.message.content").String()
+		}
+		if content != "" {
+			payload, _ := json.Marshal(map[string]any{"model": model, "output": content})
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+// OpenAIResSSEToOpenAI 将 OpenAI-Res SSE 流转换为 OpenAI SSE 格式
+func OpenAIResSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event:") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "" || data == line {
+			continue
+		}
+		if data == "[DONE]" {
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			return nil
+		}
+		content := gjson.Get(data, "output").String()
+		if content != "" {
+			chunk := map[string]any{
+				"object": "chat.completion.chunk",
+				"model":  model,
+				"choices": []map[string]any{{
+					"index": 0,
+					"delta": map[string]string{"content": content},
+				}},
+			}
+			payload, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}
+	return scanner.Err()
 }

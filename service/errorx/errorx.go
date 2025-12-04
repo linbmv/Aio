@@ -1,6 +1,7 @@
 package errorx
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -29,6 +30,7 @@ func ClassifyHTTPError(status int, body []byte, header http.Header) ClassifiedEr
 	}
 
 	bodyStr := strings.ToLower(string(body))
+	pErr := parseProviderError(body)
 
 	switch status {
 	case 400, 422:
@@ -50,14 +52,22 @@ func ClassifyHTTPError(status int, body []byte, header http.Header) ClassifiedEr
 			Level:      ErrorKey,
 			HTTPStatus: status,
 			Code:       "auth_invalid",
-			Retryable:  true,
+			Retryable:  false,
 		}
 	case 429:
-		if isGlobalRateLimit(bodyStr, header) {
+		if pErr.Code == "insufficient_quota" || pErr.Type == "insufficient_quota" || isGlobalRateLimit(bodyStr, header) {
 			return ClassifiedError{
 				Level:      ErrorChannel,
 				HTTPStatus: status,
 				Code:       "rate_limit_global",
+				Retryable:  true,
+			}
+		}
+		if pErr.Type == "rate_limit_error" || strings.Contains(bodyStr, "rate limit") {
+			return ClassifiedError{
+				Level:      ErrorKey,
+				HTTPStatus: status,
+				Code:       "rate_limit_key",
 				Retryable:  true,
 			}
 		}
@@ -82,6 +92,14 @@ func ClassifyHTTPError(status int, body []byte, header http.Header) ClassifiedEr
 			Retryable:  true,
 		}
 	default:
+		if status >= 400 && status < 500 {
+			return ClassifiedError{
+				Level:      ErrorClient,
+				HTTPStatus: status,
+				Code:       "client_error",
+				Retryable:  false,
+			}
+		}
 		if strings.Contains(bodyStr, "invalid") || strings.Contains(bodyStr, "expired") {
 			return ClassifiedError{
 				Level:      ErrorKey,
@@ -104,8 +122,29 @@ func isGlobalRateLimit(body string, header http.Header) bool {
 	if scope == "account" || scope == "organization" {
 		return true
 	}
+	if header.Get("Retry-After") != "" {
+		return true
+	}
 	if strings.Contains(body, "account") && strings.Contains(body, "rate limit") {
 		return true
 	}
 	return false
+}
+
+type providerError struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func parseProviderError(body []byte) providerError {
+	var wrapper struct {
+		Error providerError `json:"error"`
+	}
+	if err := json.Unmarshal(body, &wrapper); err == nil {
+		wrapper.Error.Type = strings.ToLower(wrapper.Error.Type)
+		wrapper.Error.Code = strings.ToLower(wrapper.Error.Code)
+		return wrapper.Error
+	}
+	return providerError{}
 }
