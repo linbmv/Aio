@@ -14,6 +14,7 @@ import (
 	"github.com/atopos31/llmio/consts"
 	"github.com/atopos31/llmio/models"
 	"github.com/atopos31/llmio/providers"
+	"github.com/atopos31/llmio/service/errorx"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
@@ -64,6 +65,12 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 				continue
 			}
 
+			// 检查渠道是否冷却中
+			if providers.IsChannelCoolingDown(modelWithProvider.ModelID, modelWithProvider.ProviderID) {
+				slog.Info("channel is cooling down, skip", "model_id", modelWithProvider.ModelID, "provider_id", modelWithProvider.ProviderID)
+				continue
+			}
+
 			provider := providerMap[modelWithProvider.ProviderID]
 
 			chatModel, err := providers.New(style, provider.Config, provider.ID)
@@ -101,40 +108,37 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 
 			req, usedKey, err := chatModel.BuildReq(httptrace.WithClientTrace(ctx, trace), header, modelWithProvider.ProviderModel, before.raw)
 			if err != nil {
-				if usedKey != "" {
-					providers.MarkKeyFailure(provider.ID, usedKey)
-				}
 				retryLog <- log.WithError(err)
-				// 构建请求失败，标记 key 但不移除 provider，让其他 key 有机会
 				continue
 			}
 
 			res, err := client.Do(req)
 			if err != nil {
-				if usedKey != "" {
-					providers.MarkKeyFailure(provider.ID, usedKey)
-				}
 				retryLog <- log.WithError(err)
-				// 请求失败，标记 key 但不移除 provider
 				continue
 			}
 
 			if res.StatusCode != http.StatusOK {
-				if usedKey != "" {
-					providers.MarkKeyFailure(provider.ID, usedKey)
-				}
-				byteBody, err := io.ReadAll(res.Body)
-				if err != nil {
-					slog.Error("read body error", "error", err)
-				}
+				byteBody, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+
+				classifiedErr := errorx.ClassifyHTTPError(res.StatusCode, byteBody, res.Header)
 				retryLog <- log.WithError(fmt.Errorf("status: %d, body: %s", res.StatusCode, string(byteBody)))
 
-				if res.StatusCode == http.StatusTooManyRequests {
-					// 达到RPM限制 降低权重
-					balancer.Reduce(id)
+				switch classifiedErr.Level {
+				case errorx.ErrorKey:
+					if usedKey != "" {
+						providers.MarkKeyFailure(provider.ID, usedKey, 0)
+					}
+					if classifiedErr.Code == "rate_limit_key" {
+						balancer.Reduce(id)
+					}
+				case errorx.ErrorChannel:
+					providers.MarkChannelFailure(modelWithProvider.ModelID, provider.ID, 2*time.Minute)
+					balancer.Delete(id)
+				case errorx.ErrorClient:
+					return nil, 0, fmt.Errorf("client error: %s", string(byteBody))
 				}
-				// 非 200 状态，标记 key 但不移除 provider
-				res.Body.Close()
 				continue
 			}
 

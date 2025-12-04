@@ -8,15 +8,17 @@ import (
 
 // keyCooldownManager key冷却管理，标记失败Key避免短时间重复使用
 type keyCooldownManager struct {
-	mu       sync.RWMutex
-	expireAt map[string]time.Time
-	duration time.Duration
+	mu           sync.RWMutex
+	expireAt     map[string]time.Time
+	failureCount map[string]int
+	duration     time.Duration
 }
 
 func newKeyCooldownManager(defaultDuration time.Duration) *keyCooldownManager {
 	return &keyCooldownManager{
-		expireAt: make(map[string]time.Time),
-		duration: defaultDuration,
+		expireAt:     make(map[string]time.Time),
+		failureCount: make(map[string]int),
+		duration:     defaultDuration,
 	}
 }
 
@@ -24,12 +26,27 @@ func (m *keyCooldownManager) mark(id string, d time.Duration) {
 	if id == "" {
 		return
 	}
-	if d <= 0 {
-		d = m.duration
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	count := m.failureCount[id] + 1
+	m.failureCount[id] = count
+
+	if d <= 0 {
+		d = calculateBackoff(m.duration, count)
+	}
 	m.expireAt[id] = time.Now().Add(d)
+}
+
+func calculateBackoff(base time.Duration, failureCount int) time.Duration {
+	d := base
+	for i := 1; i < failureCount && d < 30*time.Minute; i++ {
+		d *= 2
+	}
+	if d > 30*time.Minute {
+		d = 30 * time.Minute
+	}
+	return d
 }
 
 func (m *keyCooldownManager) isCooling(id string, now time.Time) bool {
@@ -48,6 +65,7 @@ func (m *keyCooldownManager) isCooling(id string, now time.Time) bool {
 	// 过期清理
 	m.mu.Lock()
 	delete(m.expireAt, id)
+	delete(m.failureCount, id)
 	m.mu.Unlock()
 	return false
 }
@@ -72,6 +90,7 @@ func (m *keyCooldownManager) cleanup() {
 	for id, expireAt := range m.expireAt {
 		if expireAt.Before(now) {
 			delete(m.expireAt, id)
+			delete(m.failureCount, id)
 		}
 	}
 }
@@ -80,12 +99,12 @@ func makeKeyCooldownID(providerID uint, key string) string {
 	return fmt.Sprintf("%d:%s", providerID, key)
 }
 
-// MarkKeyFailure 将Key标记为冷却
-func MarkKeyFailure(providerID uint, key string) {
+// MarkKeyFailure 将Key标记为冷却，支持自定义冷却时长
+func MarkKeyFailure(providerID uint, key string, duration time.Duration) {
 	if key == "" {
 		return
 	}
-	globalKeyCooldown.mark(makeKeyCooldownID(providerID, key), 0)
+	globalKeyCooldown.mark(makeKeyCooldownID(providerID, key), duration)
 }
 
 // IsKeyCoolingDown 判断Key是否仍在冷却
