@@ -12,6 +12,7 @@ func Auth(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 不设置token，则不进行验证
 		if token == "" {
+			c.Next()
 			return
 		}
 
@@ -36,6 +37,7 @@ func AuthAnthropic(koken string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 不设置token，则不进行验证
 		if koken == "" {
+			c.Next()
 			return
 		}
 
