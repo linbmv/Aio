@@ -151,6 +151,7 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var eventType string
 	chunkID := fmt.Sprintf("chatcmpl-%d", time.Now().Unix())
+	created := time.Now().Unix()
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -177,14 +178,16 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 					chunk := map[string]interface{}{
 						"id":      chunkID,
 						"object":  "chat.completion.chunk",
-						"created": time.Now().Unix(),
+						"created": created,
 						"model":   model,
 						"choices": []map[string]interface{}{
 							{
 								"index": 0,
-								"delta": map[string]string{
+								"delta": map[string]interface{}{
+									"role":    "assistant",
 									"content": delta.Delta.Text,
 								},
+								"finish_reason": nil,
 							},
 						},
 					}
@@ -196,6 +199,21 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 				}
 
 			case "message_stop":
+				finalChunk := map[string]interface{}{
+					"id":      chunkID,
+					"object":  "chat.completion.chunk",
+					"created": created,
+					"model":   model,
+					"choices": []map[string]interface{}{
+						{
+							"index":         0,
+							"delta":         map[string]interface{}{},
+							"finish_reason": "stop",
+						},
+					},
+				}
+				finalBytes, _ := json.Marshal(finalChunk)
+				fmt.Fprintf(w, "data: %s\n\n", finalBytes)
 				fmt.Fprintf(w, "data: [DONE]\n\n")
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
@@ -448,9 +466,6 @@ func OpenAISSEToOpenAIRes(r io.Reader, w io.Writer, model string) error {
 			return nil
 		}
 		content := gjson.Get(line, "choices.0.delta.content").String()
-		if content == "" {
-			content = gjson.Get(line, "choices.0.message.content").String()
-		}
 		if content != "" {
 			payload, _ := json.Marshal(map[string]any{"model": model, "output": content})
 			fmt.Fprintf(w, "data: %s\n\n", payload)
@@ -466,6 +481,9 @@ func OpenAISSEToOpenAIRes(r io.Reader, w io.Writer, model string) error {
 func OpenAIResSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	chunkID := fmt.Sprintf("chatcmpl-%d", time.Now().Unix())
+	created := time.Now().Unix()
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "event:") {
@@ -485,11 +503,14 @@ func OpenAIResSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		content := gjson.Get(data, "output").String()
 		if content != "" {
 			chunk := map[string]any{
-				"object": "chat.completion.chunk",
-				"model":  model,
+				"id":      chunkID,
+				"object":  "chat.completion.chunk",
+				"created": created,
+				"model":   model,
 				"choices": []map[string]any{{
 					"index": 0,
 					"delta": map[string]string{"content": content},
+					"finish_reason": nil,
 				}},
 			}
 			payload, _ := json.Marshal(chunk)
