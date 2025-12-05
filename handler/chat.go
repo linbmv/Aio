@@ -99,10 +99,11 @@ func chatHandler(c *gin.Context, defaultFormat string) {
 
 	if before.Stream {
 		slog.Info("starting stream response")
-		// 流式响应保持 handler 存活，避免请求 context 被提前取消导致转换中断
-		streamCtx, streamCancel := context.WithCancel(context.WithoutCancel(ctx))
+		// 使用独立的context避免请求context取消影响流式响应
+		streamCtx, streamCancel := context.WithCancel(context.Background())
 		defer streamCancel()
 
+		// 监听原始请求context，在客户端断开时取消流
 		go func() {
 			<-ctx.Done()
 			slog.Info("request context done, canceling stream")
