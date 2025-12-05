@@ -166,6 +166,10 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 			switch eventType {
+			case "message_start", "content_block_start", "content_block_stop", "message_delta":
+				// 忽略这些事件
+				continue
+
 			case "content_block_delta":
 				var delta struct {
 					Delta struct {
@@ -192,6 +196,9 @@ func AnthropicSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 						}
 						roleBytes, _ := json.Marshal(roleChunk)
 						fmt.Fprintf(w, "data: %s\n\n", roleBytes)
+						if flusher, ok := w.(http.Flusher); ok {
+							flusher.Flush()
+						}
 						firstChunk = false
 					}
 
