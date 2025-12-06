@@ -315,6 +315,9 @@ func AnthropicSSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool)
 				if text == "" {
 					text = gjson.Get(data, "delta.reasoning_content").String()
 				}
+				if text == "" {
+					text = gjson.Get(data, "delta.output_text").String()
+				}
 				if text != "" {
 					chunk := map[string]interface{}{
 						"model":  model,
@@ -519,10 +522,11 @@ func OpenAIResponsesAPIToOpenAIRes(raw []byte, model string) ([]byte, error) {
 	id := gjson.GetBytes(raw, "id").String()
 	created := gjson.GetBytes(raw, "created").Int()
 
-	// 聚合所有 output 中的文本内容
+	// 聚合所有可能位置的文本内容
 	var textParts []string
+
+	// 1) 标准 Responses API output 数组
 	gjson.GetBytes(raw, "output").ForEach(func(_, item gjson.Result) bool {
-		// 处理嵌套的 content 数组
 		if content := item.Get("content"); content.Exists() && content.IsArray() {
 			content.ForEach(func(_, c gjson.Result) bool {
 				if c.Get("type").String() == "output_text" {
@@ -533,13 +537,31 @@ func OpenAIResponsesAPIToOpenAIRes(raw []byte, model string) ([]byte, error) {
 				return true
 			})
 		} else if item.Get("type").String() == "output_text" {
-			// 处理简化格式的 output
 			if text := item.Get("text").String(); text != "" {
 				textParts = append(textParts, text)
 			}
 		}
 		return true
 	})
+
+	// 2) 回退：choices/message.content (OpenAI 风格兜底)
+	if len(textParts) == 0 {
+		if t := gjson.GetBytes(raw, "choices.0.message.content").String(); t != "" {
+			textParts = append(textParts, t)
+		}
+	}
+	// 3) 回退：根级 output_text
+	if len(textParts) == 0 {
+		if t := gjson.GetBytes(raw, "output_text").String(); t != "" {
+			textParts = append(textParts, t)
+		}
+	}
+	// 4) 回退：根级 content 文本
+	if len(textParts) == 0 {
+		if t := gjson.GetBytes(raw, "content").String(); t != "" {
+			textParts = append(textParts, t)
+		}
+	}
 
 	output := strings.Join(textParts, "")
 	if output == "" {
@@ -608,11 +630,25 @@ func OpenAIToOpenAIRes(raw []byte) ([]byte, error) {
 
 // AnthropicToOpenAIRes 将 Anthropic 响应转换为 OpenAI-Res 格式
 func AnthropicToOpenAIRes(raw []byte, model string) ([]byte, error) {
-	content := gjson.GetBytes(raw, "content.0.text").String()
+	var parts []string
+	gjson.GetBytes(raw, "content").ForEach(func(_, item gjson.Result) bool {
+		switch item.Get("type").String() {
+		case "text":
+			if t := item.Get("text").String(); t != "" {
+				parts = append(parts, t)
+			}
+		case "reasoning_content":
+			if t := item.Get("text").String(); t != "" {
+				parts = append(parts, t)
+			}
+		}
+		return true
+	})
+	output := strings.Join(parts, "")
 	return json.Marshal(map[string]interface{}{
 		"id":      gjson.GetBytes(raw, "id").String(),
 		"model":   model,
-		"output":  content,
+		"output":  output,
 		"created": time.Now().Unix(),
 	})
 }
