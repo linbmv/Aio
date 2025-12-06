@@ -342,6 +342,112 @@ func AnthropicSSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool)
 	return fmt.Errorf("anthropic stream closed without stop event")
 }
 
+// OpenAIResponsesAPISSEToOpenAIRes 将 OpenAI Responses API 的 SSE 事件流转换为简化的 OpenAI-Res SSE 格式
+func OpenAIResponsesAPISSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var eventType string
+	var chunkCount, totalBytes int
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+		switch eventType {
+		case "response.output_text.delta":
+			text := gjson.Get(data, "delta").String()
+			if text == "" {
+				continue
+			}
+			payload, _ := json.Marshal(map[string]any{
+				"model":  model,
+				"output": text,
+			})
+			n, _ := fmt.Fprintf(w, "data: %s\n\n", payload)
+			totalBytes += n
+			chunkCount++
+			safeFlush(w)
+
+		case "response.output_text.done", "response.done", "response.completed":
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			safeFlush(w)
+			if debug {
+				slog.Debug("OpenAIResponsesAPISSEToOpenAIRes completed", "chunks", chunkCount, "bytes", totalBytes, "event", eventType)
+			}
+			return nil
+
+		case "response.error", "error":
+			errMsg := gjson.Get(data, "error.message").String()
+			if errMsg == "" {
+				errMsg = gjson.Get(data, "message").String()
+			}
+			if errMsg == "" {
+				errMsg = data
+			}
+			return fmt.Errorf("openai responses stream error: %s", errMsg)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("openai responses stream read error: %w", err)
+	}
+	return fmt.Errorf("openai responses stream closed without completed event")
+}
+
+// OpenAIResponsesAPIToOpenAIRes 将 OpenAI Responses API 的非流式响应转换为简化的 OpenAI-Res 格式
+func OpenAIResponsesAPIToOpenAIRes(raw []byte, model string) ([]byte, error) {
+	// 检查是否已经是简化格式（避免重复转换）
+	if gjson.GetBytes(raw, "output").Exists() && gjson.GetBytes(raw, "output").Type == gjson.String {
+		return raw, nil
+	}
+
+	id := gjson.GetBytes(raw, "id").String()
+	created := gjson.GetBytes(raw, "created").Int()
+
+	// 聚合所有 output 中的文本内容
+	var textParts []string
+	gjson.GetBytes(raw, "output").ForEach(func(_, item gjson.Result) bool {
+		// 处理嵌套的 content 数组
+		if content := item.Get("content"); content.Exists() && content.IsArray() {
+			content.ForEach(func(_, c gjson.Result) bool {
+				if c.Get("type").String() == "output_text" {
+					if text := c.Get("text").String(); text != "" {
+						textParts = append(textParts, text)
+					}
+				}
+				return true
+			})
+		} else if item.Get("type").String() == "output_text" {
+			// 处理简化格式的 output
+			if text := item.Get("text").String(); text != "" {
+				textParts = append(textParts, text)
+			}
+		}
+		return true
+	})
+
+	output := strings.Join(textParts, "")
+	if output == "" {
+		return nil, fmt.Errorf("no text output found in response")
+	}
+
+	return json.Marshal(map[string]interface{}{
+		"id":      id,
+		"model":   model,
+		"output":  output,
+		"created": created,
+	})
+}
+
 // DetectFormat 检测请求格式
 func DetectFormat(raw []byte, fallback string) string {
 	if gjson.GetBytes(raw, "input").Exists() {
@@ -507,6 +613,10 @@ func ConvertRequest(raw []byte, from, to string) ([]byte, error) {
 // ConvertResponse 转换响应格式（非流）
 func ConvertResponse(raw []byte, from, to, model string) ([]byte, error) {
 	if from == to {
+		// openai-res 调用真实 Responses API 时需要将原始响应转为简化格式
+		if from == consts.StyleOpenAIRes {
+			return OpenAIResponsesAPIToOpenAIRes(raw, model)
+		}
 		return raw, nil
 	}
 	switch {
@@ -558,6 +668,14 @@ func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, mode
 	}
 
 	if from == to {
+		// openai-res 调用真实 Responses API 时需要将原始事件转为简化 SSE，而非直接透传
+		if from == consts.StyleOpenAIRes {
+			err := OpenAIResponsesAPISSEToOpenAIRes(streamReader, w, model, debug)
+			if err != nil && debug {
+				slog.Debug("ConvertStream openai-res convert failed", "error", err)
+			}
+			return err
+		}
 		// Use buffered copy with immediate flush for each chunk
 		buf := make([]byte, 4096)
 		var totalBytes int64
