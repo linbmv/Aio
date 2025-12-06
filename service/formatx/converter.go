@@ -569,10 +569,22 @@ func DetectFormat(raw []byte, fallback string) string {
 func OpenAIResToOpenAI(raw []byte) ([]byte, error) {
 	input := gjson.GetBytes(raw, "input").String()
 	model := gjson.GetBytes(raw, "model").String()
-	return json.Marshal(map[string]interface{}{
+	stream := gjson.GetBytes(raw, "stream").Bool()
+	payload := map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": input}},
-	})
+	}
+	if maxTokens := gjson.GetBytes(raw, "max_output_tokens").Int(); maxTokens > 0 {
+		payload["max_tokens"] = maxTokens
+	}
+	if temp := gjson.GetBytes(raw, "temperature").Float(); temp != 0 {
+		payload["temperature"] = temp
+	}
+	if stream {
+		payload["stream"] = true
+		payload["stream_options"] = map[string]bool{"include_usage": true}
+	}
+	return json.Marshal(payload)
 }
 
 // OpenAIToOpenAIRes 将 OpenAI 请求转换为 OpenAI-Res 格式
