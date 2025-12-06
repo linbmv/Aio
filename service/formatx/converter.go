@@ -634,6 +634,14 @@ func ConvertResponse(raw []byte, from, to, model string) ([]byte, error) {
 		return OpenAIResponsesAPIToOpenAIRes(raw, model)
 	}
 
+	// 自动检测：如果 Provider 声称是 openai 但实际返回 openai-res 格式
+	if provider == consts.StyleOpenAI && to == consts.StyleOpenAIRes {
+		if gjson.GetBytes(raw, "output").Exists() {
+			// Provider 实际返回的是 openai-res 格式，直接转换
+			return OpenAIResponsesAPIToOpenAIRes(raw, model)
+		}
+	}
+
 	if provider == to {
 		return raw, nil
 	}
@@ -689,6 +697,12 @@ func ConvertStream(ctx context.Context, r io.Reader, w io.Writer, from, to, mode
 
 	// OpenAI-Res 需要强制转换，即使 from == to
 	if from == consts.StyleOpenAIRes && to == consts.StyleOpenAIRes {
+		return OpenAIResponsesAPISSEToOpenAIRes(streamReader, w, model, debug)
+	}
+
+	// 自动检测：如果 Provider 声称是 openai 但实际返回 openai-res SSE 格式
+	if provider == consts.StyleOpenAI && to == consts.StyleOpenAIRes {
+		// 尝试检测是否是 openai-res SSE 格式（包含 event: response.* 行）
 		return OpenAIResponsesAPISSEToOpenAIRes(streamReader, w, model, debug)
 	}
 
