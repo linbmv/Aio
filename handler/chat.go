@@ -107,6 +107,10 @@ func chatHandler(c *gin.Context, defaultFormat string) {
 			slog.Debug("client headers", "headers", sanitizeHeaders(c.Request.Header))
 		}
 
+		// 立即发送初始数据以提交HTTP响应（对HTTP/2和Cloudflare很重要）
+		fmt.Fprintf(c.Writer, ": ping\n\n")
+		c.Writer.Flush()
+
 		// 使用独立的context避免请求context取消影响流式响应
 		streamCtx := context.Background()
 
