@@ -645,6 +645,9 @@ func AnthropicToOpenAIRes(raw []byte, model string) ([]byte, error) {
 		return true
 	})
 	output := strings.Join(parts, "")
+	if output == "" {
+		return nil, fmt.Errorf("no text content found in anthropic response")
+	}
 	return json.Marshal(map[string]interface{}{
 		"id":      gjson.GetBytes(raw, "id").String(),
 		"model":   model,
