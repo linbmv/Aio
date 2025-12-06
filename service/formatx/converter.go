@@ -352,6 +352,10 @@ func AnthropicSSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool)
 
 // OpenAIResponsesAPISSEToOpenAIRes 将 OpenAI Responses API 的 SSE 事件流转换为简化的 OpenAI-Res SSE 格式
 func OpenAIResponsesAPISSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool) error {
+	// 立即发送ping以唤醒客户端
+	fmt.Fprintf(w, ": ping\n\n")
+	safeFlush(w)
+
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var eventType string
@@ -359,6 +363,11 @@ func OpenAIResponsesAPISSEToOpenAIRes(r io.Reader, w io.Writer, model string, de
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// 跳过注释行和空行
+		if strings.HasPrefix(line, ":") || line == "" {
+			continue
+		}
 
 		if strings.HasPrefix(line, "event:") {
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
@@ -369,46 +378,63 @@ func OpenAIResponsesAPISSEToOpenAIRes(r io.Reader, w io.Writer, model string, de
 		}
 
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
 
-		switch eventType {
-		case "response.output_text.delta":
-			text := gjson.Get(data, "delta").String()
-			if text == "" {
-				continue
+		// 处理带 event 的格式
+		if eventType != "" {
+			switch eventType {
+			case "response.output_text.delta":
+				text := gjson.Get(data, "delta").String()
+				if text != "" {
+					payload, _ := json.Marshal(map[string]any{"model": model, "output": text})
+					n, _ := fmt.Fprintf(w, "data: %s\n\n", payload)
+					totalBytes += n
+					chunkCount++
+					safeFlush(w)
+				}
+			case "response.output_text.done", "response.done", "response.completed":
+				fmt.Fprint(w, "data: [DONE]\n\n")
+				safeFlush(w)
+				if debug {
+					slog.Debug("OpenAIResponsesAPISSEToOpenAIRes completed", "chunks", chunkCount, "bytes", totalBytes)
+				}
+				return nil
+			case "response.error", "error":
+				errMsg := gjson.Get(data, "error.message").String()
+				if errMsg == "" {
+					errMsg = data
+				}
+				return fmt.Errorf("openai responses stream error: %s", errMsg)
 			}
-			payload, _ := json.Marshal(map[string]any{
-				"model":  model,
-				"output": text,
-			})
-			n, _ := fmt.Fprintf(w, "data: %s\n\n", payload)
-			totalBytes += n
+			eventType = ""
+			continue
+		}
+
+		// 处理无 event 的简化格式（直接是 data: {...}）
+		if gjson.Get(data, "output").Exists() {
+			// 已经是简化格式，直接透传
+			fmt.Fprintf(w, "data: %s\n\n", data)
 			chunkCount++
 			safeFlush(w)
-
-		case "response.output_text.done", "response.done", "response.completed":
+		} else if data == "[DONE]" {
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			safeFlush(w)
 			if debug {
-				slog.Debug("OpenAIResponsesAPISSEToOpenAIRes completed", "chunks", chunkCount, "bytes", totalBytes, "event", eventType)
+				slog.Debug("OpenAIResponsesAPISSEToOpenAIRes completed", "chunks", chunkCount)
 			}
 			return nil
-
-		case "response.error", "error":
-			errMsg := gjson.Get(data, "error.message").String()
-			if errMsg == "" {
-				errMsg = gjson.Get(data, "message").String()
-			}
-			if errMsg == "" {
-				errMsg = data
-			}
-			return fmt.Errorf("openai responses stream error: %s", errMsg)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("openai responses stream read error: %w", err)
 	}
-	return fmt.Errorf("openai responses stream closed without completed event")
+	if debug {
+		slog.Debug("OpenAIResponsesAPISSEToOpenAIRes stream ended", "chunks", chunkCount)
+	}
+	return nil
 }
 
 // OpenAIResponsesAPIToOpenAIRes 将 OpenAI Responses API 的非流式响应转换为简化的 OpenAI-Res 格式
