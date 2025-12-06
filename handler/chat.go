@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var debugMode = os.Getenv("DEBUG_MODE") == "true"
+var debugMode = true // 强制启用调试模式
 
 var (
 	preProcessors = map[string]service.Beforer{
