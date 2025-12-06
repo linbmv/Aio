@@ -347,6 +347,15 @@ func AnthropicSSEToOpenAIRes(r io.Reader, w io.Writer, model string, debug bool)
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("anthropic stream read error: %w", err)
 	}
+	// 如果已经发送了数据，优雅结束；否则报错
+	if chunkCount > 0 {
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		safeFlush(w)
+		if debug {
+			slog.Debug("AnthropicSSEToOpenAIRes completed without stop event", "chunks", chunkCount)
+		}
+		return nil
+	}
 	return fmt.Errorf("anthropic stream closed without stop event")
 }
 
