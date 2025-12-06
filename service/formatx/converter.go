@@ -434,6 +434,15 @@ func OpenAIResponsesAPISSEToOpenAIRes(r io.Reader, w io.Writer, model string, de
 				slog.Debug("OpenAIResponsesAPISSEToOpenAIRes completed", "chunks", chunkCount)
 			}
 			return nil
+		} else if gjson.Get(data, "choices").Exists() {
+			// 处理标准 OpenAI SSE 格式：data: {"choices":[{"delta":{"content":"..."}}]}
+			content := gjson.Get(data, "choices.0.delta.content").String()
+			if content != "" {
+				payload, _ := json.Marshal(map[string]any{"model": model, "output": content})
+				fmt.Fprintf(w, "data: %s\n\n", payload)
+				chunkCount++
+				safeFlush(w)
+			}
 		}
 	}
 
