@@ -42,7 +42,11 @@ type ModelWithProvider struct {
 	WithHeader       *bool             // 是否透传header
 	Status           *bool             // 是否启用
 	CustomerHeaders  map[string]string `gorm:"serializer:json"` // 自定义headers
-	Weight           int
+	Weight           int `gorm:"default:1"`
+	KeyCooldownUntil      *time.Time // key级冷却截止时间
+	KeyCooldownStep       int        // key级退避次数
+	ProviderCooldownUntil *time.Time // 渠道冷却截止时间
+	ProviderCooldownStep  int        // 渠道退避次数
 }
 
 type ChatLog struct {

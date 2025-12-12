@@ -21,6 +21,13 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// KeyConfig 多 key 配置结构
+type KeyConfig struct {
+	Term   string `json:"term"`
+	Remark string `json:"remark"`
+	Status bool   `json:"status"`
+}
+
 type Provider interface {
 	BuildReq(ctx context.Context, header http.Header, model string, rawData []byte) (*http.Request, error)
 	Models(ctx context.Context) ([]Model, error)
