@@ -14,6 +14,7 @@ import (
 	"github.com/atopos31/llmio/handler"
 	"github.com/atopos31/llmio/middleware"
 	"github.com/atopos31/llmio/models"
+	"github.com/atopos31/llmio/service/keypool"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	_ "golang.org/x/crypto/x509roots/fallback"
@@ -23,6 +24,13 @@ func init() {
 	ctx := context.Background()
 	models.Init(ctx, "./db/llmio.db")
 	slog.Info("TZ", "time.Local", time.Local.String())
+
+	// 启动时同步所有 provider 配置中的 keys 到 key pool
+	if err := keypool.SyncAllProvidersFromConfig(ctx, models.DB); err != nil {
+		slog.Error("Failed to sync provider keys on startup", "error", err)
+	} else {
+		slog.Info("Successfully synced all provider keys from config to key pool")
+	}
 }
 
 func main() {

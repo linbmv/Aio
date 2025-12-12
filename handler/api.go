@@ -11,6 +11,7 @@ import (
 	"github.com/atopos31/llmio/consts"
 	"github.com/atopos31/llmio/models"
 	"github.com/atopos31/llmio/providers"
+	"github.com/atopos31/llmio/service/keypool"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -143,6 +144,11 @@ func CreateProvider(c *gin.Context) {
 		return
 	}
 
+	// 自动同步配置中的 keys 到 key pool
+	if err := keypool.SyncProviderConfigKeys(c.Request.Context(), models.DB, provider.ID, provider.Config); err != nil {
+		slog.Warn("Failed to sync provider keys", "error", err, "provider_id", provider.ID)
+	}
+
 	common.Success(c, provider)
 }
 
@@ -189,6 +195,11 @@ func UpdateProvider(c *gin.Context) {
 	if err != nil {
 		common.InternalServerError(c, "Failed to retrieve updated provider: "+err.Error())
 		return
+	}
+
+	// 自动同步配置中的 keys 到 key pool
+	if err := keypool.SyncProviderConfigKeys(c.Request.Context(), models.DB, uint(id), updatedProvider.Config); err != nil {
+		slog.Warn("Failed to sync provider keys", "error", err, "provider_id", id)
 	}
 
 	common.Success(c, updatedProvider)
