@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 
@@ -694,6 +695,10 @@ func GetRequestLogs(c *gin.Context) {
 		}
 		if log.AuthKeyID == 0 {
 			keyName = "admin"
+		}
+		// 修复无穷大值
+		if math.IsInf(log.Tps, 0) || math.IsNaN(log.Tps) {
+			log.Tps = 0
 		}
 		wrapLogs = append(wrapLogs, WrapLog{
 			ChatLog: log,
