@@ -45,24 +45,36 @@ func (o *OpenAI) pickKey() string {
 	return o.APIKey
 }
 
-func (o *OpenAI) BuildReq(ctx context.Context, header http.Header, model string, rawBody []byte) (*http.Request, error) {
+func (o *OpenAI) BuildReqWithKey(ctx context.Context, header http.Header, model string, rawBody []byte, key string, keyID uint) (*http.Request, uint, error) {
 	body, err := sjson.SetBytes(rawBody, "model", model)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/chat/completions", o.BaseURL), bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if header != nil {
 		req.Header = header
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if req.Header.Get("Authorization") == "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.pickKey()))
+	apiKey := key
+	usedKeyID := keyID
+	if apiKey == "" {
+		apiKey = o.pickKey()
+		usedKeyID = 0
 	}
+	if apiKey == "" {
+		return nil, 0, fmt.Errorf("no openai api key available")
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
-	return req, nil
+	return req, usedKeyID, nil
+}
+
+func (o *OpenAI) BuildReq(ctx context.Context, header http.Header, model string, rawBody []byte) (*http.Request, error) {
+	req, _, err := o.BuildReqWithKey(ctx, header, model, rawBody, "", 0)
+	return req, err
 }
 
 func (o *OpenAI) Models(ctx context.Context) ([]Model, error) {

@@ -47,24 +47,36 @@ func (a *Anthropic) pickKey() string {
 	return a.APIKey
 }
 
-func (a *Anthropic) BuildReq(ctx context.Context, header http.Header, model string, rawBody []byte) (*http.Request, error) {
+func (a *Anthropic) BuildReqWithKey(ctx context.Context, header http.Header, model string, rawBody []byte, key string, keyID uint) (*http.Request, uint, error) {
 	body, err := sjson.SetBytes(rawBody, "model", model)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/messages", a.BaseURL), bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if header != nil {
 		req.Header = header
 	}
 	req.Header.Set("content-type", "application/json")
-	if req.Header.Get("x-api-key") == "" {
-		req.Header.Set("x-api-key", a.pickKey())
+	apiKey := key
+	usedKeyID := keyID
+	if apiKey == "" {
+		apiKey = a.pickKey()
+		usedKeyID = 0
 	}
+	if apiKey == "" {
+		return nil, 0, fmt.Errorf("no anthropic api key available")
+	}
+	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", a.Version)
-	return req, nil
+	return req, usedKeyID, nil
+}
+
+func (a *Anthropic) BuildReq(ctx context.Context, header http.Header, model string, rawBody []byte) (*http.Request, error) {
+	req, _, err := a.BuildReqWithKey(ctx, header, model, rawBody, "", 0)
+	return req, err
 }
 
 type AnthropicModelsResponse struct {

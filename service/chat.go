@@ -167,13 +167,14 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 
 			// 从 Key 池获取可用 Key
 			var keyID uint
+			keyFromPool := ""
 			if keyPool != nil {
-				keyFromPool, kid, err := keyPool.Pick(ctx, provider.ID)
+				k, kid, err := keyPool.Pick(ctx, provider.ID)
 				if err != nil {
 					slog.Warn("key pool pick failed", "provider", provider.Name, "error", err)
 				} else {
 					keyID = kid
-					log.ProviderKeyID = keyID
+					keyFromPool = k
 					switch style {
 					case consts.StyleAnthropic:
 						header.Set("x-api-key", keyFromPool)
@@ -190,21 +191,32 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 				},
 			}
 
-			req, err := chatModel.BuildReq(httptrace.WithClientTrace(ctx, trace), header, modelWithProvider.ProviderModel, before.raw)
+			usedKeyID := keyID
+			var req *http.Request
+			if builder, ok := chatModel.(interface {
+				BuildReqWithKey(ctx context.Context, header http.Header, model string, rawBody []byte, key string, keyID uint) (*http.Request, uint, error)
+			}); ok {
+				req, usedKeyID, err = builder.BuildReqWithKey(httptrace.WithClientTrace(ctx, trace), header, modelWithProvider.ProviderModel, before.raw, keyFromPool, keyID)
+			} else {
+				req, err = chatModel.BuildReq(httptrace.WithClientTrace(ctx, trace), header, modelWithProvider.ProviderModel, before.raw)
+			}
 			if err != nil {
+				log.ProviderKeyID = usedKeyID
 				retryLog <- log.WithError(err)
 				// 鏋勫缓璇锋眰澶辫触 绉婚櫎寰呴€?
 				balancer.Delete(id)
 				if err := cooldownManager.OnError(ctx, modelWithProvider, cooldown.CategoryProvider); err != nil {
 					slog.Error("update cooldown error", "error", err)
 				}
-				if keyID > 0 {
-					if err := keyPool.OnError(ctx, keyID, cooldown.CategoryProvider); err != nil {
+				if usedKeyID > 0 && keyPool != nil {
+					if err := keyPool.OnError(ctx, usedKeyID, cooldown.CategoryProvider); err != nil {
 						slog.Error("key pool on error", "error", err)
 					}
 				}
 				continue
 			}
+			keyID = usedKeyID
+			log.ProviderKeyID = keyID
 
 			// 将 stream context 附加到请求上下文，用于流处理时的错误处理
 			req = req.WithContext(withStreamContext(req.Context(), &streamContext{
@@ -222,7 +234,7 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 				if err := cooldownManager.OnError(ctx, modelWithProvider, cooldown.CategoryProvider); err != nil {
 					slog.Error("update cooldown error", "error", err)
 				}
-				if keyID > 0 {
+				if keyID > 0 && keyPool != nil {
 					if err := keyPool.OnError(ctx, keyID, cooldown.CategoryProvider); err != nil {
 						slog.Error("key pool on error", "error", err)
 					}
@@ -241,7 +253,7 @@ func BalanceChat(ctx context.Context, start time.Time, style string, before Befo
 				if err := cooldownManager.OnError(ctx, modelWithProvider, category); err != nil {
 					slog.Error("update cooldown error", "error", err)
 				}
-				if keyID > 0 {
+				if keyID > 0 && keyPool != nil {
 					if err := keyPool.OnError(ctx, keyID, category); err != nil {
 						slog.Error("key pool on error", "error", err)
 					}
