@@ -29,7 +29,9 @@ func (o *OpenAIRes) BuildReq(ctx context.Context, header http.Header, model stri
 		req.Header = header
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.APIKey))
+	if req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.APIKey))
+	}
 
 	return req, nil
 }

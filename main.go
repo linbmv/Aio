@@ -72,6 +72,12 @@ func main() {
 		api.PUT("/providers/:id", handler.UpdateProvider)
 		api.DELETE("/providers/:id", handler.DeleteProvider)
 
+		// Provider key management
+		api.GET("/providers/:id/keys", handler.ListProviderKeys)
+		api.POST("/providers/:id/keys", handler.CreateProviderKey)
+		api.PUT("/providers/:id/keys/:keyId", handler.UpdateProviderKey)
+		api.DELETE("/providers/:id/keys/:keyId", handler.DeleteProviderKey)
+
 		// Model management
 		api.GET("/models", handler.GetModels)
 		api.POST("/models", handler.CreateModel)

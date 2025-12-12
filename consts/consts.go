@@ -13,6 +13,8 @@ const (
 	BalancerLottery = "lottery"
 	// 按顺序循环轮转，每次降低权重后移到队尾
 	BalancerRotor = "rotor"
+	// 平滑加权轮询
+	BalancerSmoothWeightedRR = "smooth_weighted_rr"
 	// 默认策略
 	BalancerDefault = BalancerLottery
 )

@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"strings"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atopos31/llmio/models"
+	"github.com/atopos31/llmio/service/cooldown"
 	"github.com/tidwall/gjson"
 )
 
@@ -21,6 +22,70 @@ const (
 )
 
 type Processer func(ctx context.Context, pr io.Reader, stream bool, start time.Time) (*models.ChatLog, *models.OutputUnion, error)
+
+// StreamError SSE 流中的结构化错误
+type StreamError struct {
+	Message  string
+	Type     string
+	Code     string
+	Status   int
+	Category cooldown.Category
+}
+
+func (e StreamError) Error() string {
+	msg := e.Message
+	if msg == "" {
+		msg = "stream error"
+	}
+	if e.Code != "" {
+		msg += " code=" + e.Code
+	}
+	if e.Type != "" {
+		msg += " type=" + e.Type
+	}
+	if e.Status != 0 {
+		msg += fmt.Sprintf(" status=%d", e.Status)
+	}
+	return msg
+}
+
+func (e *StreamError) resolveCategory() {
+	if e.Status != 0 {
+		e.Category = cooldown.ClassifyStatus(e.Status)
+		return
+	}
+	// 根据错误代码和类型分类
+	switch {
+	case e.Code == "insufficient_quota" || e.Code == "invalid_api_key" ||
+		e.Code == "rate_limit_exceeded" || e.Code == "billing_hard_limit_reached" ||
+		e.Code == "quota_exceeded" || e.Code == "authentication_error":
+		e.Category = cooldown.CategoryKey
+	case strings.HasPrefix(e.Type, "server_error") || e.Type == "overloaded_error":
+		e.Category = cooldown.CategoryProvider
+	case e.Type == "invalid_request_error":
+		e.Category = cooldown.CategoryClient
+	default:
+		e.Category = cooldown.CategoryProvider
+	}
+}
+
+func parseStreamError(chunk string) error {
+	errStr := gjson.Get(chunk, "error")
+	if !errStr.Exists() {
+		return nil
+	}
+	streamErr := StreamError{
+		Message: errStr.Get("message").String(),
+		Type:    errStr.Get("type").String(),
+		Code:    errStr.Get("code").String(),
+		Status:  int(errStr.Get("status").Int()),
+	}
+	if streamErr.Message == "" {
+		streamErr.Message = errStr.String()
+	}
+	streamErr.resolveCategory()
+	return streamErr
+}
 
 func ProcesserOpenAI(ctx context.Context, pr io.Reader, stream bool, start time.Time) (*models.ChatLog, *models.OutputUnion, error) {
 	// 首字时延
@@ -34,6 +99,11 @@ func ProcesserOpenAI(ctx context.Context, pr io.Reader, stream bool, start time.
 	scanner := bufio.NewScanner(pr)
 	scanner.Buffer(make([]byte, 0, InitScannerBufferSize), MaxScannerBufferSize)
 	for chunk, chunkSize := range ScannerToken(scanner) {
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
 		size += chunkSize
 		once.Do(func() {
 			firstChunkTime = time.Since(start)
@@ -47,10 +117,8 @@ func ProcesserOpenAI(ctx context.Context, pr io.Reader, stream bool, start time.
 		if chunk == "[DONE]" {
 			break
 		}
-		// 流式过程中错误
-		errStr := gjson.Get(chunk, "error")
-		if errStr.Exists() {
-			return nil, nil, errors.New(errStr.String())
+		if err := parseStreamError(chunk); err != nil {
+			return nil, nil, err
 		}
 		output.OfStringArray = append(output.OfStringArray, chunk)
 
@@ -120,6 +188,11 @@ func ProcesserOpenAiRes(ctx context.Context, pr io.Reader, stream bool, start ti
 	scanner.Buffer(make([]byte, 0, InitScannerBufferSize), MaxScannerBufferSize)
 	var event string
 	for chunk, chunkSize := range ScannerToken(scanner) {
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
 		size += chunkSize
 		once.Do(func() {
 			firstChunkTime = time.Since(start)
@@ -137,6 +210,9 @@ func ProcesserOpenAiRes(ctx context.Context, pr io.Reader, stream bool, start ti
 		content := strings.TrimPrefix(chunk, "data: ")
 		if content == "" {
 			continue
+		}
+		if err := parseStreamError(content); err != nil {
+			return nil, nil, err
 		}
 		output.OfStringArray = append(output.OfStringArray, content)
 		if event == "response.completed" {
@@ -187,6 +263,11 @@ func ProcesserAnthropic(ctx context.Context, pr io.Reader, stream bool, start ti
 	scanner.Buffer(make([]byte, 0, InitScannerBufferSize), MaxScannerBufferSize)
 	var event string
 	for chunk, chunkSize := range ScannerToken(scanner) {
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
 		size += chunkSize
 		once.Do(func() {
 			firstChunkTime = time.Since(start)
@@ -207,6 +288,9 @@ func ProcesserAnthropic(ctx context.Context, pr io.Reader, stream bool, start ti
 			continue
 		}
 
+		if err := parseStreamError(after); err != nil {
+			return nil, nil, err
+		}
 		output.OfStringArray = append(output.OfStringArray, after)
 		if event == "message_delta" {
 			usageStr = gjson.Get(after, "usage").String()

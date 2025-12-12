@@ -91,3 +91,76 @@ func (w Rotor) Reduce(key uint) {
 		}
 	}
 }
+
+// 平滑加权轮询
+type smoothWeightItem struct {
+	id      uint
+	weight  int
+	current int
+}
+
+type SmoothWeightedRR struct {
+	items []*smoothWeightItem
+	total int
+}
+
+func (rr *SmoothWeightedRR) recompute(resetCurrent bool) {
+	rr.total = 0
+	for _, item := range rr.items {
+		if resetCurrent {
+			item.current = 0
+		}
+		rr.total += item.weight
+	}
+}
+
+func NewSmoothWeightedRR(items map[uint]int) Balancer {
+	rr := &SmoothWeightedRR{}
+	for id, w := range items {
+		if w <= 0 {
+			continue
+		}
+		rr.items = append(rr.items, &smoothWeightItem{id: id, weight: w})
+	}
+	rr.recompute(true)
+	return rr
+}
+
+func (rr *SmoothWeightedRR) Pop() (uint, error) {
+	if len(rr.items) == 0 || rr.total <= 0 {
+		return 0, fmt.Errorf("no provide items or all items are disabled")
+	}
+	var picked *smoothWeightItem
+	for _, item := range rr.items {
+		item.current += item.weight
+		if picked == nil || item.current > picked.current {
+			picked = item
+		}
+	}
+	picked.current -= rr.total
+	return picked.id, nil
+}
+
+func (rr *SmoothWeightedRR) Delete(key uint) {
+	dst := rr.items[:0]
+	for _, item := range rr.items {
+		if item.id == key {
+			continue
+		}
+		dst = append(dst, item)
+	}
+	rr.items = dst
+	rr.recompute(true)
+}
+
+func (rr *SmoothWeightedRR) Reduce(key uint) {
+	for _, item := range rr.items {
+		if item.id == key {
+			item.weight -= item.weight / 3
+			if item.weight < 1 {
+				item.weight = 1
+			}
+		}
+	}
+	rr.recompute(true)
+}
